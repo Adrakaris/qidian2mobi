@@ -10,7 +10,7 @@ from ebooklib import epub
 parser = argparse.ArgumentParser(description="To Epub Parser",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("-s", "--source", action="store",
-                    help="Source to read from (uu: UU看书)",
+                    help="Source to read from (uu: UU看书; 51: 无忧书城)",
                     default="uu")
 parser.add_argument("-v", "--verbose", action="store_true", help="Run in verbose mode")
 parser.add_argument("link", type=str, help="Link of book chapter listing")
@@ -181,6 +181,7 @@ class UUKanShu(EpubMaker):
         except KeyboardInterrupt:
             print("finishing early")
         except UnicodeDecodeError as e:
+            # NOTE: UUKanshu is formatted weird, that may lead to such errors happening in some books.
             print("Found unicode decode error, ending early since otherwise you'll just have empty pages:")
             print(e)
         finally:
@@ -233,7 +234,8 @@ class WuYouShuCheng(EpubMaker):
         super().__init__(link, encoding, verbose)
         
         # get site
-        r = urllib.request.urlopen(link).read()
+        r = Request(link, headers=EpubMaker.headers)
+        r = urllib.request.urlopen(r).read()
         mainSoup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
         
         # image - 51shucheng has no images
@@ -248,8 +250,58 @@ class WuYouShuCheng(EpubMaker):
         description = catalog.find("div", {"class":"intro"}).get_text()  # type:ignore
         
         if self.verbose: print(f"Found {title} by {author}, desc\n{description}")
-
-
+        
+        # initi book
+        self._initBook(uid, title, author, imageLink, desc=description)
+        
+        # send off to process
+        self._parseList(mainSoup.find("div", {"class":"mulu-list"}).ul.findChildren(recursive=False))
+        
+        # finish book
+        self._finishBook()
+        
+    def _parseList(self, listOfItems):
+        try:
+            for item in listOfItems:
+                if self.verbose: print(item)
+                # 51shucheng seems not to do volumes
+                chapName = item.a.get_text()
+                chapLink = item.a["href"]
+                self._handleChapter(chapLink, chapName)
+        
+        except KeyboardInterrupt:
+            print("finishing early")
+            
+    def _handleChapter(self, chapLink, chapName):
+        print(f"> {self.chapterCount} {chapName} ({chapLink})")
+        
+        r = Request(chapLink, headers=EpubMaker.headers)
+        r = urllib.request.urlopen(r).read()
+        soup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
+        
+        title = soup.find("h1").get_text()
+        
+        content = soup.find(id="neirong")
+        
+        if self.verbose: 
+            print("========CONTENT===========")
+            print(content) #.split("\n\n"))
+            print("=======/CONTENT===========")
+            
+        self.chapterCount += 1
+        
+        chap = epub.EpubHtml(uid=title,
+                             title=title,
+                             file_name=f"chap-{self.chapterCount}.html",
+                             lang=self.lang)
+        chap.content = f"<h2>{title}</h2>" + str(content)
+        
+        self.book.add_item(chap)
+        self.tableOfContents.append(chap)
+        self.book.spine.append(chap)
+    
+    
+    
 
 if __name__ == "__main__":
     args = parser.parse_args()
