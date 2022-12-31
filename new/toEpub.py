@@ -250,7 +250,8 @@ class UUKanShu(EpubMaker):
         # get site
         # nicely, uukanshu doesn't forbid urlllib
         r = urllib.request.urlopen(link).read()
-        mainSoup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
+        # replace errors
+        mainSoup = BeautifulSoup(r.decode(self.encoding, "replace"), features="html.parser")
         
         # get titles and descriptions
         # img and title
@@ -295,6 +296,9 @@ class UUKanShu(EpubMaker):
                     self._handleChapter(chapLink, chapName)
         except KeyboardInterrupt:
             print("finishing early")
+        except UnicodeDecodeError as e:
+            print("Found unicode decode error, ending early since otherwise you'll just have empty pages:")
+            print(e)
         finally:
             self._endSection()
             
