@@ -128,121 +128,6 @@ class EpubMaker:
         print("Done.")
 
 
-class HetuShu(EpubMaker):
-    # NOTE: Hetushu cuts off the first bit of text, idk why but it probably is designed as so
-    # 此为废
-    
-    def __init__(self, link:str, uid:str, encoding:str="utf-8", verbose=False) -> None:
-        # hetushu uses utf-8, uukanshu uses GBK, but on the off chance that hetushu has a different
-        # one, it is provided as an option
-        super().__init__(link, encoding, verbose)
-        
-        # scrape titles, etc
-        req = Request(url=link, headers=EpubMaker.headers)
-        site = urllib.request.urlopen(req).read()
-        self.mainSoup = BeautifulSoup(site.decode(self.encoding), features="html.parser")
-        
-        info = self.mainSoup.find_all("div", {"class": "book_info"})[0]
-        if self.verbose: print("===INFO===\n", info, "\n==/INFO===")
-        # img and title
-        img = info.find("img")["src"]
-        title = info.find("h2").get_text()        
-        # author and desc
-        infoSections = info.find_all("div")
-        author = infoSections[0].find("a").get_text()
-        desc = infoSections[3].get_text(separator="\n", strip=True)
-        if self.verbose: print(f"Found {title} ({author}), desc \n{desc}")
-        
-        # book initialise
-        self._initBook(uid, title, author, "https://www.hetushu.com" + img, desc=desc)
-        
-        # send list off to do
-        self._parseList(self.mainSoup.find(id="dir").find_all(recursive=False)) # type:ignore
-        
-        # finish book
-        self._finishBook()
-        
-        
-    def _parseList(self, listOfItems):
-        try:
-            if self.verbose: print(listOfItems[:10])
-            
-            
-            for item in listOfItems:
-                # dt: title, chapter section
-                # dd: chapter
-                # if self.verbose: print(item)
-                
-                if item.name == "dt":
-                    if self.currentSectionTitle != "":
-                        self._endSection()
-                    print(f"Section {item.get_text()}")
-                    self._makeSection(item.get_text())
-                else:
-                    # chapter
-                    # if self.verbose: print(item.find("a"))
-                    link = item.find("a")
-                    chapName = link.get_text()
-                    chapLink = link["href"]
-                    self._handleChapter(chapLink, chapName)
-                    
-        except KeyboardInterrupt:
-            print("finishing early")
-        finally:
-            self._endSection()
-            
-            
-    def _handleChapter(self, chapLink, chapName):
-        # handle a specific chapter
-        print(f"> {self.chapterCount} {chapName} ({chapLink})")
-        req = Request("https://www.hetushu.com" + chapLink, headers=EpubMaker.headers)
-        site = urllib.request.urlopen(req).read()
-        soup = BeautifulSoup(site.decode(self.encoding), features="html.parser")
-        
-        def clearChildren(c):
-            # clears children to remove any thingies from the text
-            children = c.findChildren()
-            
-            if children:
-                if self.verbose: print(children)
-                for child in children:
-                    if child.name != "div":
-                        child.extract()
-        
-        title = soup.find("h2", {"class": "h2"}).get_text()  # type:ignore
-        
-        cbox = soup.find("div", id="cbox")
-        if self.verbose:
-            print("===================")
-            print(str(cbox)[:500])
-            print("===================")
-        
-        contentdiv = soup.find("div", id="content")
-        paragraphs = contentdiv.find_all("div") # type:ignore
-        
-        if self.verbose: 
-            pass
-            # print(str(contentdiv)[:300])
-            # print(paragraphs[:10])
-        # paragraphs = map(clearChildren, paragraphs)
-        for paragraph in paragraphs: # type:ignore
-            clearChildren(paragraph)
-        paragraphs = map(str, paragraphs) # type:ignore
-        paragraphs = "\n".join(paragraphs).replace("div>", "p>")
-        self.chapterCount += 1
-        
-        chap = epub.EpubHtml(
-            title=title,
-            file_name=f"chapter-{self.chapterCount}.html",
-            lang=self.lang
-        )
-        chap.content = f"<h2>{self.currentSectionTitle}・{title}</h2>" + paragraphs
-        
-        self.book.add_item(chap)
-        self.sectionBuffer.append(chap)
-        self.book.spine.append(chap)        
-        
-
 class UUKanShu(EpubMaker):
     def __init__(self, link, uid, encoding:str="GBK", verbose=False) -> None:
         super().__init__(link, encoding, verbose)
@@ -251,7 +136,7 @@ class UUKanShu(EpubMaker):
         # nicely, uukanshu doesn't forbid urlllib
         r = urllib.request.urlopen(link).read()
         # replace errors
-        mainSoup = BeautifulSoup(r.decode(self.encoding, "replace"), features="html.parser")
+        mainSoup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
         
         # get titles and descriptions
         # img and title
@@ -279,7 +164,6 @@ class UUKanShu(EpubMaker):
 
     def _parseList(self, listOfItems):
         try:
-            # if self.verbose: print(listOfItems[:10])
             
             for item in listOfItems:
                 if self.verbose: print(item)
@@ -310,9 +194,26 @@ class UUKanShu(EpubMaker):
         soup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
         
         title = soup.find(id="timu").get_text() # type:ignore
-        content = soup.find(id="contentbox").find_all("p") # type:ignore
-        content = map(str, content)
-        content = "\n".join(content)
+        # content = soup.find(id="contentbox").find_all("p", recursive=False).get_text("\n\n") # type:ignore
+        content = soup.find(id="contentbox")
+        for c in content.findChildren(recursive=False):
+            if c.name != "p":
+                c.extract()
+        content = content.get_text("\n\n")
+        
+        if self.verbose: 
+            print("========CONTENT===========")
+            print(content) #.split("\n\n"))
+            print("=======/CONTENT===========")
+        
+        # content = map(str, content)
+        # content = "\n".join(content)
+        content = "\n".join(list(map(lambda x: "<p>" + x + "</p>", content.split("\n\n"))))
+        
+        # if self.verbose: 
+        #     print("========CONTENT=2=========")
+        #     print(content) #.split("\n\n"))
+        #     print("=======/CONTENT=2=========")
         
         self.chapterCount += 1
         
@@ -326,13 +227,36 @@ class UUKanShu(EpubMaker):
         self.sectionBuffer.append(chap)
         self.book.spine.append(chap)
 
+
+class WuYouShuCheng(EpubMaker):
+    def __init__(self, link:str, uid:str, encoding:str="utf-8", verbose:bool=False) -> None:
+        super().__init__(link, encoding, verbose)
+        
+        # get site
+        r = urllib.request.urlopen(link).read()
+        mainSoup = BeautifulSoup(r.decode(self.encoding), features="html.parser")
+        
+        # image - 51shucheng has no images
+        imageLink = "https://www.51shucheng.net/images/logo.png"
+        
+        catalog = mainSoup.find("div", {"class":"catalog"})
+        # title
+        title = catalog.find("h1").get_text()  # type:ignore
+        # author
+        author = catalog.find("div", {"class":"info"}).get_text().split("作者：")[1]  # type:ignore        
+        # desc
+        description = catalog.find("div", {"class":"intro"}).get_text()  # type:ignore
+        
+        if self.verbose: print(f"Found {title} by {author}, desc\n{description}")
+
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     if args.source == "uu":
         UUKanShu(args.link, args.uid, verbose=args.verbose)
-    elif args.source == "hetu":
-        print("Warning: HeTuShu will return incomplete chapters")
-        HetuShu(args.link, args.uid, verbose=args.verbose)
+    elif args.source == "51":
+        WuYouShuCheng(args.link, args.uid, verbose=args.verbose)
     else:
         print("Error: no compatible sourec found")
         exit(1)
